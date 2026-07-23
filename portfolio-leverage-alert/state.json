@@ -4,13 +4,13 @@
   "open_positions": [],
   "pending_alert": null,
   "ticker": "QQQ",
-  "current_price": 705.35,
+  "current_price": 691.96,
   "ath": 745.34,
   "ath_date": "2026-06-02",
-  "drawdown_pct": -5.37,
+  "drawdown_pct": -7.16,
   "bounce": {
-    "local_low": 695.33,
-    "bounce_pct": 1.44,
+    "local_low": 691.96,
+    "bounce_pct": 0.0,
     "consecutive_up_days": 0,
     "confirmed": false
   }
