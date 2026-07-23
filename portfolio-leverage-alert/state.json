@@ -1,5 +1,7 @@
 {
   "alerted_tiers": [],
+  "pending_tiers": [],
+  "open_positions": [],
   "pending_alert": null,
   "ticker": "QQQ",
   "current_price": 705.35,
@@ -11,6 +13,5 @@
     "bounce_pct": 1.44,
     "consecutive_up_days": 0,
     "confirmed": false
-  },
-  "pending_tiers": []
+  }
 }
