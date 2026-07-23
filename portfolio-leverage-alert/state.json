@@ -2,8 +2,15 @@
   "alerted_tiers": [],
   "pending_alert": null,
   "ticker": "QQQ",
-  "current_price": 708.97,
+  "current_price": 705.35,
   "ath": 745.34,
   "ath_date": "2026-06-02",
-  "drawdown_pct": -4.88
+  "drawdown_pct": -5.37,
+  "bounce": {
+    "local_low": 695.33,
+    "bounce_pct": 1.44,
+    "consecutive_up_days": 0,
+    "confirmed": false
+  },
+  "pending_tiers": []
 }

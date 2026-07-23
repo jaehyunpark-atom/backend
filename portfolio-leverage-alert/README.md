@@ -5,7 +5,7 @@
 두 시스템으로 나뉘어 동작한다:
 
 1. **이 repo의 GitHub Actions** (`.github/workflows/portfolio-leverage-alert.yml`)
-   매일 05:30 KST에 `check_drawdown.py`를 실행해 yfinance로 QQQ 현재가/사상 최고가를 정확히 계산하고, `state.json`에 결과를 커밋한다. 새 트리거 단계에 도달하면 `pending_alert` 필드에 알림 메시지를 남긴다.
+   매일 05:30 KST에 `check_drawdown.py`를 실행해 yfinance로 QQQ 현재가/사상 최고가를 정확히 계산하고, `state.json`에 결과를 커밋한다. 새 트리거 단계에 도달하면 바로 알림을 보내지 않고 `pending_tiers`에 대기시킨다. 최근 15거래일 저점 대비 +3% 반등하거나 2거래일 연속 상승 마감(반등 확인)하면, 그때 대기 중인 단계들을 모아 `pending_alert` 필드에 알림 메시지를 남긴다.
 2. **Claude 클라우드 루틴** (claude.ai routines, 이 repo 밖에서 관리)
    매일 06:00 KST에 이 repo를 클론해 `state.json`의 `pending_alert`를 읽고, 값이 있으면 카카오톡(PlayMCP)으로 전송한 뒤 `pending_alert`를 `null`로 되돌려 커밋한다.
 
