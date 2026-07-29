@@ -1,17 +1,84 @@
 {
-  "alerted_tiers": [],
-  "pending_tiers": [],
-  "open_positions": [],
+  "tiers": {
+    "QLD:-10": {
+      "status": "PENDING",
+      "shares": 0,
+      "entry_price": null
+    },
+    "QLD:-15": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "QLD:-20": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "QLD:-25": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "QLD:-30": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "QLD:-35": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "TQQQ:-45": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "TQQQ:-50": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "TQQQ:-55": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "TQQQ:-60": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "TQQQ:-65": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "TQQQ:-70": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    },
+    "TQQQ:-75": {
+      "status": "WAIT",
+      "shares": 0,
+      "entry_price": null
+    }
+  },
   "pending_alert": null,
   "ticker": "QQQ",
-  "current_price": 675.49,
+  "current_price": 666.84,
   "ath": 745.34,
   "ath_date": "2026-06-02",
-  "drawdown_pct": -9.37,
+  "drawdown_pct": -10.53,
   "bounce": {
-    "local_low": 675.49,
+    "local_low": 666.84,
     "bounce_pct": 0.0,
     "consecutive_up_days": 0,
     "confirmed": false
-  }
+  },
+  "qld_price": 78.8,
+  "tqqq_price": 59.12,
+  "usd_krw_rate": 1452.08
 }

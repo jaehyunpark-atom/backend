@@ -1,5 +1,5 @@
 """
-나스닥100(QQQ) 사상 최고가 대비 낙폭을 계산해 QLD/TQQQ 매수·매도 트리거 단계에
+나스닥100(QQQ) 사상 최고가 대비 낙폭을 계산해 QLD/TQQQ의 매수·익절·손절 tier에
 새로 도달했는지 판단하고, 결과를 state.json에 기록한다.
 
 - 이 스크립트는 GitHub Actions에서 정기 실행된다. Claude 클라우드 루틴 실행 환경은
@@ -8,13 +8,20 @@
   남긴다. 실제 카카오톡 알림 전송은 별도의 Claude 클라우드 루틴이 이 state.json을 읽어서
   수행한다 (이 스크립트는 카카오톡을 직접 보내지 않는다).
 
-- 매수: 트리거 단계에 도달해도 바로 알림을 보내지 않는다. 하락 중인 칼날을 잡지 않기
-  위해 "반등 확인"(최근 저점 대비 +3% 반등 또는 2거래일 연속 상승 마감)이 될 때까지
-  해당 단계를 pending_tiers에 대기시켰다가, 반등이 확인되면 매수 알림을 보낸다.
-  이때 그 단계에서 산 걸로 간주해 open_positions에 기록한다.
+tier별 상태는 WAIT(대기) -> PENDING(tier 도달, 반등확인 대기) -> IN(매수 완료) 순으로
+진행하고, IN 상태에서는 두 가지 매도 조건을 감시한다:
+  - 익절: 고점대비 낙폭이 진입 tier보다 RECOVERY_STEP_PCT(%p)만큼 개선되면 매도.
+    예: -20%에서 산 물량은 -10%까지 회복하면 매도, -10%에서 산 물량은 신고가에서 매도.
+  - 손절(QLD만): 그 물량 자체의 진입가 대비 손익이 QLD_STOP_LOSS_PCT 이하로 빠지면
+    매도. 손절되면 WAIT가 아니라 COOLDOWN으로 가서, 낙폭이 그 tier 위로 완전히
+    회복해야만(=재하락이 아니라는 게 확인돼야만) 다시 PENDING을 받을 수 있다.
+    (쿨다운 없이 바로 재무장하면 하락이 계속될 때 손절→즉시재진입→재손절이 반복돼
+    무의미해지기 때문. 백테스트로 검증된 설계.)
+  - TQQQ는 애초에 깊은 tier(-45%~)에서만, 반등확인까지 거쳐 진입하므로 손절을 따로
+    두지 않는다.
 
-- 매도: open_positions에 있는 각 단계는, 고점대비 낙폭이 진입 시점보다 10%p 개선되면
-  (예: -20% 진입 -> -10%까지 회복) 매도 알림을 보내고 open_positions에서 제거한다.
+각 tier는 배정된 원화 예산을 그 시점 QLD/TQQQ 가격으로 나눠 "몇 주"를 살지 계산해서
+shares에 기록하고, 매도 시에는 그 tier가 실제로 산 주식수 그대로 전량 매도한다.
 """
 import json
 from pathlib import Path
@@ -23,44 +30,67 @@ import yfinance as yf
 
 STATE_PATH = Path(__file__).parent / "state.json"
 
-TICKER = "QQQ"  # 나스닥100 추종 ETF, 사상 최고가/현재가 기준
+TICKER = "QQQ"  # 나스닥100 추종 ETF, 사상 최고가/현재가 기준 (tier·반등확인 판단용)
 
-# 낙폭 트리거 단계 (고점 대비 하락률, %). 음수 기준이며 낮을수록(더 많이 빠질수록) 깊은 단계.
-QLD_TIERS = [-10, -15, -20]
-TQQQ_TIERS = [-30, -40, -45]
+# 낙폭 트리거 tier (고점 대비 하락률, %). QQQ 낙폭 기준.
+QLD_TIERS = [-10, -15, -20, -25, -30, -35]
+TQQQ_TIERS = [-45, -50, -55, -60, -65, -70, -75]  # 닷컴버블급 전용 리저브
 
-# 각 단계에서 집행할 매수 비중 (해당 상품에 배정한 예정 자금 대비 %).
-# QLD 15/35/50은 사용자와 합의된 배분. TQQQ는 별도 합의가 없어 QLD와 같은 비율 패턴을
-# 그대로 적용한 기본값이므로, 원하는 배분이 다르면 이 값만 바꾸면 된다.
-TRANCHE_PCT = {
-    -10: 15, -15: 35, -20: 50,   # QLD
-    -30: 15, -40: 35, -45: 50,   # TQQQ (QLD와 동일 패턴 적용, 임의 기본값)
-}
+# 상품별 총 예산(원화). 각 tier는 이걸 tier 개수로 균등분할해서 받는다.
+QLD_BUDGET_KRW = 9_000_000
+TQQQ_BUDGET_KRW = 6_000_000
+TIER_BUDGET_KRW = {t: QLD_BUDGET_KRW / len(QLD_TIERS) for t in QLD_TIERS}
+TIER_BUDGET_KRW.update({t: TQQQ_BUDGET_KRW / len(TQQQ_TIERS) for t in TQQQ_TIERS})
 
-# 매도(청산) 기준: 진입 단계보다 낙폭이 이만큼(%p) 개선되면 그 단계 매수분을 매도.
-# 예: -20%에서 산 물량은 -10%까지 회복하면 매도, -10%에서 산 물량은 신고가(0%)에서 매도.
-RECOVERY_STEP_PCT = 10
-
-# 낙폭이 이 값보다 얕아지면(고점을 상당 부분 회복하면) 다음 하락 사이클을 위해
-# 매수 알림 이력을 초기화한다. (매도 대상 open_positions는 각자의 매도 기준으로 별도 관리)
-RESET_THRESHOLD_PCT = -10
+RECOVERY_STEP_PCT = 10  # 익절: 진입 tier보다 낙폭이 이만큼(%p) 개선되면 매도
+QLD_STOP_LOSS_PCT = -20  # QLD 전용. 진입가 대비 이 비율 이하로 빠지면 손절 (TQQQ는 None)
 
 # 반등 확인 기준
-LOCAL_LOW_LOOKBACK_DAYS = 15  # 최근 며칠 중 저점을 "직전 저점"으로 볼지
-BOUNCE_PCT_THRESHOLD = 3.0  # 저점 대비 이만큼(%) 반등하면 확인
-CONSECUTIVE_UP_DAYS = 2  # 또는 며칠 연속 상승 마감하면 확인
+LOCAL_LOW_LOOKBACK_DAYS = 15
+BOUNCE_PCT_THRESHOLD = 3.0
+CONSECUTIVE_UP_DAYS = 2
+
+FALLBACK_USD_KRW_RATE = 1500.0
+
+
+def default_tiers() -> dict:
+    tiers = {}
+    for t in QLD_TIERS:
+        tiers[f"QLD:{t}"] = {"status": "WAIT", "shares": 0, "entry_price": None}
+    for t in TQQQ_TIERS:
+        tiers[f"TQQQ:{t}"] = {"status": "WAIT", "shares": 0, "entry_price": None}
+    return tiers
 
 
 def load_state() -> dict:
     if STATE_PATH.exists():
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    return {"alerted_tiers": [], "pending_tiers": [], "open_positions": [], "pending_alert": None}
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        state.setdefault("tiers", default_tiers())
+        return state
+    return {"tiers": default_tiers(), "pending_alert": None}
 
 
 def save_state(state: dict) -> None:
     STATE_PATH.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def get_usd_krw_rate() -> float:
+    try:
+        hist = yf.Ticker("KRW=X").history(period="5d")
+        if not hist.empty:
+            return float(hist["Close"].iloc[-1])
+    except Exception:
+        pass
+    return FALLBACK_USD_KRW_RATE
+
+
+def get_price(ticker: str) -> float:
+    hist = yf.Ticker(ticker).history(period="5d")
+    if hist.empty:
+        raise RuntimeError(f"{ticker} 가격 데이터를 가져오지 못했습니다.")
+    return float(hist["Close"].iloc[-1])
 
 
 def check_bounce(closes) -> dict:
@@ -86,6 +116,61 @@ def check_bounce(closes) -> dict:
     }
 
 
+def process_tiers(tiers, product, tier_list, price, stop_loss_pct, drawdown_pct, bounce, buy_msgs, sell_msgs):
+    """tier 목록 하나(QLD 또는 TQQQ)의 상태를 전이시키고 필요한 알림 문구를 채운다."""
+    for t in tier_list:
+        key = f"{product}:{t}"
+        pos = tiers.setdefault(key, {"status": "WAIT", "shares": 0, "entry_price": None})
+
+        # 쿨다운 해제: 낙폭이 그 tier 위로 완전히 회복
+        if pos["status"] == "COOLDOWN" and drawdown_pct > t:
+            pos["status"] = "WAIT"
+
+        # 신규 tier 도달 -> 대기(반등확인 전)
+        if pos["status"] == "WAIT" and drawdown_pct <= t:
+            pos["status"] = "PENDING"
+
+        # 반등확인 -> 매수, 주식수는 그 시점 가격으로 계산해서 고정
+        if pos["status"] == "PENDING" and bounce["confirmed"]:
+            budget_usd = TIER_BUDGET_KRW[t] / get_usd_krw_rate_cached()
+            shares = int(budget_usd // price)
+            if shares > 0:
+                pos["status"] = "IN"
+                pos["shares"] = shares
+                pos["entry_price"] = round(price, 2)
+                buy_msgs.append(f"{product}{t}%tier {shares}주매수")
+            # 예산으로 1주도 못 사면 PENDING 유지, 다음 실행 때 재시도
+
+        # 보유 중이면 익절/손절 조건 감시
+        if pos["status"] == "IN":
+            take_profit = drawdown_pct >= t + RECOVERY_STEP_PCT or drawdown_pct >= -0.5
+            stop_loss = False
+            if stop_loss_pct is not None and pos["entry_price"]:
+                rel_pct = (price / pos["entry_price"] - 1) * 100
+                stop_loss = rel_pct <= stop_loss_pct
+
+            if take_profit:
+                sell_msgs.append(f"{product}{t}%tier {pos['shares']}주익절매도")
+                pos["status"] = "WAIT"
+                pos["shares"] = 0
+                pos["entry_price"] = None
+            elif stop_loss:
+                sell_msgs.append(f"{product}{t}%tier {pos['shares']}주손절매도")
+                pos["status"] = "COOLDOWN"
+                pos["shares"] = 0
+                pos["entry_price"] = None
+
+
+_usd_krw_cache = None
+
+
+def get_usd_krw_rate_cached() -> float:
+    global _usd_krw_cache
+    if _usd_krw_cache is None:
+        _usd_krw_cache = get_usd_krw_rate()
+    return _usd_krw_cache
+
+
 def main() -> None:
     hist = yf.Ticker(TICKER).history(period="max")
     if hist.empty:
@@ -99,70 +184,42 @@ def main() -> None:
 
     bounce = check_bounce(closes)
 
+    qld_price = get_price("QLD")
+    tqqq_price = get_price("TQQQ")
+    usd_krw_rate = get_usd_krw_rate_cached()
+
     state = load_state()
-    alerted = set(state.get("alerted_tiers", []))
-    pending = set(state.get("pending_tiers", []))
-    open_positions = set(state.get("open_positions", []))
+    tiers = state["tiers"]
+
+    buy_msgs = []
+    sell_msgs = []
+
+    process_tiers(tiers, "QLD", QLD_TIERS, qld_price, QLD_STOP_LOSS_PCT, drawdown_pct, bounce, buy_msgs, sell_msgs)
+    process_tiers(tiers, "TQQQ", TQQQ_TIERS, tqqq_price, None, drawdown_pct, bounce, buy_msgs, sell_msgs)
 
     messages = []
-
-    # ------------------------------------------------------------------
-    # 매도: open_positions 중 낙폭이 진입 단계보다 RECOVERY_STEP_PCT만큼 개선된 것 청산
-    # ------------------------------------------------------------------
-    sell_tiers = [t for t in open_positions if drawdown_pct >= t + RECOVERY_STEP_PCT]
-    if sell_tiers:
-        parts = []
-        for t in sorted(sell_tiers, reverse=True):
-            product = "TQQQ" if t in TQQQ_TIERS else "QLD"
-            parts.append(f"{product} {t}%진입분({TRANCHE_PCT.get(t, '?')}%비중)")
+    if sell_msgs:
+        messages.append(f"🔻QQQ{drawdown_pct:.1f}% " + ", ".join(sell_msgs))
+    if buy_msgs:
         messages.append(
-            f"🔻 나스닥100 고점대비 {drawdown_pct:.1f}%까지 회복 → "
-            f"{', '.join(parts)} 매도 시점"
+            f"🔔QQQ고점({ath_date})대비{drawdown_pct:.1f}%, 반등+{bounce['bounce_pct']:.1f}% "
+            + ", ".join(buy_msgs)
         )
-        open_positions -= set(sell_tiers)
-
-    # ------------------------------------------------------------------
-    # 매수: 고점을 상당 부분 회복했으면 다음 하락 사이클을 위해 이력 초기화
-    # ------------------------------------------------------------------
-    if drawdown_pct > RESET_THRESHOLD_PCT and (alerted or pending):
-        alerted = set()
-        pending = set()
-
-    reached = [t for t in (QLD_TIERS + TQQQ_TIERS) if drawdown_pct <= t]
-    # 아직 알림도, 대기 등록도 안 된 새 단계 -> 대기(pending) 목록에 추가
-    newly_reached = [t for t in reached if t not in alerted and t not in pending]
-    pending.update(newly_reached)
-
-    # 대기 중인 단계가 있고 반등이 확인되면, 대기 중인 단계 전부를 한 번에 알림 + 매수분 기록
-    if pending and bounce["confirmed"]:
-        parts = []
-        for t in sorted(pending, reverse=True):
-            product = "TQQQ" if t in TQQQ_TIERS else "QLD"
-            parts.append(f"{product} {t}%단계({TRANCHE_PCT.get(t, '?')}%비중)")
-        messages.append(
-            f"🔔 나스닥100(QQQ) 고점({ath_date}) 대비 {drawdown_pct:.1f}% 하락, "
-            f"반등 확인(저점대비 +{bounce['bounce_pct']:.1f}%) → "
-            f"{', '.join(parts)} 매수 시점"
-        )
-        open_positions.update(pending)
-        alerted.update(pending)
-        pending = set()
-    # 반등 미확인이면 새 매수 알림 없이 pending만 유지
 
     if messages:
         state["pending_alert"] = "\n".join(messages)
-    # messages가 없으면 기존 pending_alert(아직 카톡 루틴이 못 읽었을 수 있음)를 그대로 둔다
+    state.setdefault("pending_alert", None)
 
+    state["tiers"] = tiers
     state["ticker"] = TICKER
     state["current_price"] = round(current_price, 2)
     state["ath"] = round(ath, 2)
     state["ath_date"] = ath_date
     state["drawdown_pct"] = round(drawdown_pct, 2)
     state["bounce"] = bounce
-    state["alerted_tiers"] = sorted(alerted, reverse=True)
-    state["pending_tiers"] = sorted(pending, reverse=True)
-    state["open_positions"] = sorted(open_positions, reverse=True)
-    state.setdefault("pending_alert", None)
+    state["qld_price"] = round(qld_price, 2)
+    state["tqqq_price"] = round(tqqq_price, 2)
+    state["usd_krw_rate"] = round(usd_krw_rate, 2)
 
     save_state(state)
     print(json.dumps(state, ensure_ascii=False, indent=2))
