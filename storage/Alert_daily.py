@@ -1,12 +1,17 @@
+import os
+
 import yfinance as yf
 import requests
 
 # =========================
 # Discord Webhook
 # =========================
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1521498658611134546/WaLxZ_1tkschmD9TyynQ0pdJBRZwh0d-JN4YlOmPhnPImj35mEeAhnFKoO7HtYiVCh1p"
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 def send_discord(msg: str):
+    if not DISCORD_WEBHOOK_URL:
+        print("DISCORD_WEBHOOK_URL 환경변수가 설정되지 않았습니다. 전송을 건너뜁니다.")
+        return
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
     except:
