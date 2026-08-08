@@ -7,7 +7,19 @@
 - `Alert_daily.py`: 나스닥/S&P500/BTC/VIX/USD-KRW/CNN Fear&Greed Index를 조회해 Discord로 매일 시황 요약 전송
 - `Alert_NASDAQ.py`: NDX(나스닥100) 낙폭이 -10/-20/-30/-40/-50% 구간을 넘나들 때 Discord로 하락/반등 알림 전송 (자체 `state.json` 관리)
 
+## Discord Webhook 설정
+
+`Alert_daily.py`, `Alert_NASDAQ.py`는 `DISCORD_WEBHOOK_URL` 환경변수에서 Webhook URL을
+읽습니다 (더 이상 코드에 하드코딩되어 있지 않습니다). 환경변수가 없으면 전송을 건너뛰고
+콘솔에만 출력합니다.
+
+- **로컬/데스크탑에서 실행할 때**: 셸에서 `export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."`
+  하고 실행하거나, `.env` 파일(git에 커밋 금지)에 넣고 `python-dotenv` 등으로 로드하세요.
+- **GitHub Actions에서 실행할 때**: 레포 Settings → Secrets and variables → Actions →
+  New repository secret 에서 `DISCORD_WEBHOOK_URL`을 등록하고, workflow에서
+  `env: { DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }} }`로 넘기세요.
+  (Claude에게는 레포 Secrets를 만들 수 있는 권한/도구가 없어서 이 등록은 직접 해주셔야 합니다.)
+
 ## TODO
-- `Alert_daily.py`, `Alert_NASDAQ.py`에 Discord Webhook URL이 코드에 하드코딩되어 있습니다. 환경변수나 GitHub Secrets로 옮기는 것을 권장합니다.
 - 이 스크립트들을 자동 실행하는 GitHub Actions workflow는 아직 없습니다 (원본 storage 레포에도 없었음). 필요하면 `portfolio-leverage-alert.yml`을 참고해 추가하세요.
 - `requirements.txt`는 참고용으로 함께 추가했습니다 (원본 storage 레포에는 없었음).
